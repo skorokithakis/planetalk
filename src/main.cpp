@@ -1,0 +1,324 @@
+#include <Arduino.h>
+#include <WiFi.h>
+#include <DNSServer.h>
+#include <ESPAsyncWebServer.h>
+#include <ArduinoJson.h>
+#include <map>
+#include <string>
+#include <array>
+
+#include "index_html.h"
+
+static const char* AP_SSID = "PlaneTalk";
+static const int AP_MAX_STATIONS = 10;
+// DNS port 53 is the standard DNS port; all queries are answered with the AP
+// IP so that every hostname resolves to us, triggering captive portal detection.
+static const uint8_t DNS_PORT = 53;
+
+static const int MESSAGE_BUFFER_SIZE = 50;
+
+static DNSServer dns_server;
+static AsyncWebServer http_server(80);
+static AsyncWebSocket web_socket("/ws");
+
+// Circular buffer of recent messages stored as serialised JSON strings so they
+// can be forwarded verbatim to newly-connected clients without re-serialising.
+static std::array<std::string, MESSAGE_BUFFER_SIZE> message_buffer;
+static int message_buffer_head = 0;  // Index of the oldest message slot.
+static int message_buffer_count = 0;
+
+static std::map<uint32_t, std::string> client_nicknames;
+
+static const char* ADJECTIVES[] = {
+    "Excitable", "Sneaky", "Jolly", "Grumpy", "Witty",
+    "Brave", "Sleepy", "Fuzzy", "Mighty", "Gentle",
+    "Zesty", "Cosmic", "Dizzy", "Lucky", "Peppy",
+    "Stormy", "Chill", "Bouncy", "Sassy", "Quirky",
+};
+static const int ADJECTIVES_COUNT = 20;
+
+static const char* FRUITS[] = {
+    "Banana", "Tomato", "Avocado", "Mango", "Radish",
+    "Lemon", "Pepper", "Cherry", "Turnip", "Olive",
+    "Papaya", "Celery", "Coconut", "Potato", "Apricot",
+    "Cabbage", "Ginger", "Peach", "Carrot", "Parsnip",
+};
+static const int FRUITS_COUNT = 20;
+
+// Derive a deterministic nickname from an IP address string by hashing each
+// character with a simple polynomial hash, then taking modulo the list sizes.
+// Using two independent hash seeds ensures the adjective and fruit selections
+// are uncorrelated even when IPs differ by only one octet.
+static std::string nickname_for_ip(const String& ip) {
+    uint32_t hash_a = 5381;
+    uint32_t hash_b = 0x811c9dc5;
+    for (size_t i = 0; i < (size_t)ip.length(); i++) {
+        hash_a = hash_a * 33 ^ (uint8_t)ip[i];
+        hash_b = (hash_b ^ (uint8_t)ip[i]) * 0x01000193;
+    }
+    std::string nick = ADJECTIVES[hash_a % ADJECTIVES_COUNT];
+    nick += FRUITS[hash_b % FRUITS_COUNT];
+    return nick;
+}
+
+static void push_message(const std::string& json_string) {
+    message_buffer[message_buffer_head] = json_string;
+    message_buffer_head = (message_buffer_head + 1) % MESSAGE_BUFFER_SIZE;
+    if (message_buffer_count < MESSAGE_BUFFER_SIZE) {
+        message_buffer_count++;
+    }
+}
+
+// Serialise the message buffer into a {type:"history", messages:[...]} packet
+// and send it to a single client.
+static void send_history(AsyncWebSocketClient* client) {
+    JsonDocument doc;
+    doc["type"] = "history";
+    JsonArray messages = doc["messages"].to<JsonArray>();
+
+    // Walk the buffer from oldest to newest.
+    int start = (message_buffer_count < MESSAGE_BUFFER_SIZE)
+                    ? 0
+                    : message_buffer_head;
+    for (int i = 0; i < message_buffer_count; i++) {
+        int index = (start + i) % MESSAGE_BUFFER_SIZE;
+        messages.add(message_buffer[index].c_str());
+    }
+
+    std::string output;
+    serializeJson(doc, output);
+    client->text(output.c_str());
+}
+
+static void broadcast(const std::string& json_string) {
+    web_socket.textAll(json_string.c_str());
+}
+
+static std::string make_message(const char* nick, const char* text) {
+    JsonDocument doc;
+    doc["type"] = "message";
+    doc["nick"] = nick;
+    doc["text"] = text;
+    std::string output;
+    serializeJson(doc, output);
+    return output;
+}
+
+static void handle_websocket_event(
+    AsyncWebSocket* server,
+    AsyncWebSocketClient* client,
+    AwsEventType event_type,
+    void* arg,
+    uint8_t* data,
+    size_t length
+) {
+    if (event_type == WS_EVT_CONNECT) {
+        String ip = client->remoteIP().toString();
+        std::string nick = nickname_for_ip(ip);
+        client_nicknames[client->id()] = nick;
+
+        // Tell this client its assigned nickname before sending history so the
+        // UI can display it before any messages are rendered.
+        JsonDocument welcome;
+        welcome["type"] = "welcome";
+        welcome["nick"] = nick.c_str();
+        std::string welcome_str;
+        serializeJson(welcome, welcome_str);
+        client->text(welcome_str.c_str());
+
+        send_history(client);
+
+        std::string join_msg = make_message("System", (nick + " has joined").c_str());
+        push_message(join_msg);
+        broadcast(join_msg);
+
+    } else if (event_type == WS_EVT_DISCONNECT) {
+        auto it = client_nicknames.find(client->id());
+        if (it != client_nicknames.end()) {
+            std::string leave_msg = make_message("System", (it->second + " has left").c_str());
+            push_message(leave_msg);
+            broadcast(leave_msg);
+            client_nicknames.erase(it);
+        }
+
+    } else if (event_type == WS_EVT_DATA) {
+        AwsFrameInfo* info = (AwsFrameInfo*)arg;
+        // Only handle complete, single-frame text messages to keep things simple.
+        // Fragmented or binary messages are silently ignored.
+        if (!info->final || info->index != 0 || info->opcode != WS_TEXT) {
+            return;
+        }
+
+        JsonDocument doc;
+        DeserializationError error = deserializeJson(doc, data, length);
+        if (error) {
+            JsonDocument err;
+            err["type"] = "error";
+            err["text"] = "Invalid JSON";
+            std::string err_str;
+            serializeJson(err, err_str);
+            client->text(err_str.c_str());
+            return;
+        }
+
+        const char* type = doc["type"];
+        if (!type) return;
+
+        if (strcmp(type, "message") == 0) {
+            const char* text = doc["text"];
+            if (!text || strlen(text) == 0) return;
+            if (strlen(text) > 500) return;
+
+            auto it = client_nicknames.find(client->id());
+            if (it == client_nicknames.end()) return;
+
+            const char* to_nick = doc["to"];
+            if (to_nick && strlen(to_nick) > 0) {
+                // Private message: find the target client by nickname.
+                AsyncWebSocketClient* target_client = nullptr;
+                for (auto& entry : client_nicknames) {
+                    if (entry.second == to_nick) {
+                        target_client = web_socket.client(entry.first);
+                        break;
+                    }
+                }
+
+                if (!target_client) {
+                    JsonDocument err;
+                    err["type"] = "error";
+                    err["text"] = "User not found";
+                    std::string err_str;
+                    serializeJson(err, err_str);
+                    client->text(err_str.c_str());
+                    return;
+                }
+
+                // Build the PM payload once; both recipient and sender see it.
+                JsonDocument pm_doc;
+                pm_doc["type"] = "message";
+                pm_doc["nick"] = it->second.c_str();
+                pm_doc["text"] = text;
+                pm_doc["pm"]   = true;
+                std::string pm_str;
+                serializeJson(pm_doc, pm_str);
+
+                target_client->text(pm_str.c_str());
+                // Echo back to sender only if they are not messaging themselves.
+                if (target_client->id() != client->id()) {
+                    client->text(pm_str.c_str());
+                }
+                // PMs are ephemeral — not stored in the message buffer.
+                return;
+            }
+
+            std::string msg = make_message(it->second.c_str(), text);
+            push_message(msg);
+            broadcast(msg);
+
+        } else if (strcmp(type, "nick") == 0) {
+            const char* new_nick_raw = doc["nick"];
+            if (!new_nick_raw) return;
+
+            // Strip leading/trailing whitespace.
+            std::string new_nick = new_nick_raw;
+            size_t first = new_nick.find_first_not_of(" \t\r\n");
+            size_t last  = new_nick.find_last_not_of(" \t\r\n");
+            if (first == std::string::npos) {
+                new_nick = "";
+            } else {
+                new_nick = new_nick.substr(first, last - first + 1);
+            }
+
+            // Validate: non-empty, max 20 chars, letters/digits/spaces only.
+            bool valid = !new_nick.empty() && new_nick.size() <= 20;
+            if (valid) {
+                for (char c : new_nick) {
+                    if (!isalnum((unsigned char)c) && c != ' ') { valid = false; break; }
+                }
+            }
+
+            if (!valid) {
+                JsonDocument err;
+                err["type"] = "error";
+                err["text"] = "Nickname must be 1-20 characters (letters, numbers, spaces)";
+                std::string err_str;
+                serializeJson(err, err_str);
+                client->text(err_str.c_str());
+                return;
+            }
+
+            auto it = client_nicknames.find(client->id());
+            if (it == client_nicknames.end()) return;
+
+            std::string old_nick = it->second;
+            it->second = new_nick;
+
+            JsonDocument nick_doc;
+            nick_doc["type"] = "nick";
+            nick_doc["old"]  = old_nick.c_str();
+            nick_doc["new"]  = new_nick.c_str();
+            std::string nick_str;
+            serializeJson(nick_doc, nick_str);
+            broadcast(nick_str);
+
+            // Tell the requesting client its confirmed new nick via the welcome
+            // message type. Clients only update their own nick display from
+            // welcome messages, so this is the authoritative identity update.
+            JsonDocument welcome_doc;
+            welcome_doc["type"] = "welcome";
+            welcome_doc["nick"] = new_nick.c_str();
+            std::string welcome_str;
+            serializeJson(welcome_doc, welcome_str);
+            client->text(welcome_str.c_str());
+        }
+    }
+}
+
+// Redirect the request to the root page.
+static void redirect_to_root(AsyncWebServerRequest* request) {
+    request->redirect("/");
+}
+
+void setup() {
+    Serial.begin(115200);
+
+    // Open AP with no password; channel 1, not hidden, max 10 connected stations.
+    WiFi.softAP(AP_SSID, nullptr, 1, 0, AP_MAX_STATIONS);
+
+    Serial.print("AP started. IP: ");
+    Serial.println(WiFi.softAPIP());
+
+    // Wildcard DNS: every hostname resolves to the AP IP, which is what causes
+    // Android/iOS/Windows/Firefox to detect a captive portal and show a popup.
+    dns_server.start(DNS_PORT, "*", WiFi.softAPIP());
+
+    web_socket.onEvent(handle_websocket_event);
+    http_server.addHandler(&web_socket);
+
+    // Captive portal detection endpoints — each OS probes a different URL.
+    // Android probes /generate_204 and expects an HTTP 204; a redirect works too.
+    http_server.on("/generate_204", HTTP_GET, redirect_to_root);
+    // Apple probes /hotspot-detect.html.
+    http_server.on("/hotspot-detect.html", HTTP_GET, redirect_to_root);
+    // Windows probes /connecttest.txt and /redirect.
+    http_server.on("/connecttest.txt", HTTP_GET, redirect_to_root);
+    http_server.on("/redirect", HTTP_GET, redirect_to_root);
+    // Firefox probes /success.txt.
+    http_server.on("/success.txt", HTTP_GET, redirect_to_root);
+    // Microsoft uses /fwlink/ paths; the wildcard prefix matches all of them.
+    http_server.on("/fwlink/*", HTTP_GET, redirect_to_root);
+
+    http_server.on("/", HTTP_GET, [](AsyncWebServerRequest* request) {
+        request->send(200, "text/html", INDEX_HTML);
+    });
+
+    // Redirect any unhandled path to root so the captive portal always shows.
+    http_server.onNotFound(redirect_to_root);
+
+    http_server.begin();
+}
+
+void loop() {
+    dns_server.processNextRequest();
+    web_socket.cleanupClients();
+}
