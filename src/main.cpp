@@ -4,12 +4,13 @@
 #include <ESPAsyncWebServer.h>
 #include <ArduinoJson.h>
 #include <map>
+#include <set>
 #include <string>
 #include <array>
 
 #include "index_html.h"
 
-static const char* AP_SSID = "PlaneTalk";
+static const char* AP_SSID = "Connect and chat!";
 static const int AP_MAX_STATIONS = 10;
 // DNS port 53 is the standard DNS port; all queries are answered with the AP
 // IP so that every hostname resolves to us, triggering captive portal detection.
@@ -28,6 +29,15 @@ static int message_buffer_head = 0;  // Index of the oldest message slot.
 static int message_buffer_count = 0;
 
 static std::map<uint32_t, std::string> client_nicknames;
+
+// Tracks which client IPs have loaded the main page at least once. Used to
+// distinguish first-time visitors (who should see the captive portal popup)
+// from returning visitors (who should get real success responses so the OS
+// stops showing "no internet" warnings). Capped at 20 entries; cleared
+// entirely when full because these are ephemeral AP connections and we never
+// need to evict a specific entry.
+static std::set<uint32_t> visited_ips;
+static const size_t VISITED_IPS_MAX = 20;
 
 static const char* ADJECTIVES[] = {
     "Excitable", "Sneaky", "Jolly", "Grumpy", "Witty",
@@ -274,7 +284,18 @@ static void handle_websocket_event(
     }
 }
 
-// Redirect the request to the root page.
+// Redirect the request to the captive portal root using an absolute URL so
+// that OSes which follow the redirect land on the correct AP address rather
+// than resolving "/" relative to whatever hostname they probed.
+static void redirect_to_portal(AsyncWebServerRequest* request) {
+    String url = "http://";
+    url += WiFi.softAPIP().toString();
+    url += "/";
+    request->redirect(url);
+}
+
+// Redirect the request to the root page (relative redirect, used for the
+// catch-all not-found handler where an absolute URL is not required).
 static void redirect_to_root(AsyncWebServerRequest* request) {
     request->redirect("/");
 }
@@ -296,19 +317,66 @@ void setup() {
     http_server.addHandler(&web_socket);
 
     // Captive portal detection endpoints — each OS probes a different URL.
-    // Android probes /generate_204 and expects an HTTP 204; a redirect works too.
-    http_server.on("/generate_204", HTTP_GET, redirect_to_root);
+    // On first visit the client is redirected to / to trigger the portal popup.
+    // After the client has loaded / at least once, return the real success
+    // response so the OS stops showing "no internet" warnings.
+
+    // Android probes /generate_204 and expects HTTP 204 once connected.
+    http_server.on("/generate_204", HTTP_GET, [](AsyncWebServerRequest* request) {
+        if (visited_ips.count(request->client()->remoteIP())) {
+            request->send(204);
+        } else {
+            redirect_to_portal(request);
+        }
+    });
     // Apple probes /hotspot-detect.html.
-    http_server.on("/hotspot-detect.html", HTTP_GET, redirect_to_root);
-    // Windows probes /connecttest.txt and /redirect.
-    http_server.on("/connecttest.txt", HTTP_GET, redirect_to_root);
-    http_server.on("/redirect", HTTP_GET, redirect_to_root);
+    http_server.on("/hotspot-detect.html", HTTP_GET, [](AsyncWebServerRequest* request) {
+        if (visited_ips.count(request->client()->remoteIP())) {
+            request->send(200, "text/html",
+                "<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>");
+        } else {
+            redirect_to_portal(request);
+        }
+    });
+    // Windows probes /connecttest.txt.
+    http_server.on("/connecttest.txt", HTTP_GET, [](AsyncWebServerRequest* request) {
+        if (visited_ips.count(request->client()->remoteIP())) {
+            request->send(200, "text/plain", "Microsoft Connect Test");
+        } else {
+            redirect_to_portal(request);
+        }
+    });
+    // Windows also probes /redirect.
+    http_server.on("/redirect", HTTP_GET, [](AsyncWebServerRequest* request) {
+        if (visited_ips.count(request->client()->remoteIP())) {
+            request->send(200);
+        } else {
+            redirect_to_portal(request);
+        }
+    });
     // Firefox probes /success.txt.
-    http_server.on("/success.txt", HTTP_GET, redirect_to_root);
+    http_server.on("/success.txt", HTTP_GET, [](AsyncWebServerRequest* request) {
+        if (visited_ips.count(request->client()->remoteIP())) {
+            request->send(200, "text/plain", "success\n");
+        } else {
+            redirect_to_portal(request);
+        }
+    });
     // Microsoft uses /fwlink/ paths; the wildcard prefix matches all of them.
-    http_server.on("/fwlink/*", HTTP_GET, redirect_to_root);
+    http_server.on("/fwlink/*", HTTP_GET, [](AsyncWebServerRequest* request) {
+        if (visited_ips.count(request->client()->remoteIP())) {
+            request->send(200);
+        } else {
+            redirect_to_portal(request);
+        }
+    });
 
     http_server.on("/", HTTP_GET, [](AsyncWebServerRequest* request) {
+        uint32_t ip = request->client()->remoteIP();
+        if (visited_ips.size() >= VISITED_IPS_MAX) {
+            visited_ips.clear();
+        }
+        visited_ips.insert(ip);
         request->send(200, "text/html", INDEX_HTML);
     });
 

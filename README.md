@@ -1,6 +1,6 @@
 # PlaneTalk
 
-ESP32-C6 firmware that creates an open WiFi access point with a captive portal chat room. Connect to the AP, get a chat window, talk to everyone else connected.
+ESP32 firmware that creates an open WiFi access point with a captive portal chat room. Connect to the AP, get a chat window, talk to everyone else connected.
 
 Built for situations where you want local, infrastructure-free group chat — planes, buses, conferences, camping, or anywhere without internet.
 
@@ -16,7 +16,7 @@ Built for situations where you want local, infrastructure-free group chat — pl
 
 ## Hardware
 
-Any ESP32-C6 development board. Tested with ESP32-C6-DevKitC-1.
+Any ESP32 development board. Tested with ESP32-C3.
 
 ## Building
 
@@ -34,7 +34,7 @@ pio run -t upload
 
 ## Usage
 
-1. Flash the firmware to your ESP32-C6
+1. Flash the firmware to your ESP32
 2. Look for the "PlaneTalk" WiFi network on your phone/laptop
 3. Connect — the chat opens automatically via captive portal
 4. Start talking
