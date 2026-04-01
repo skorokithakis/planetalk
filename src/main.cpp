@@ -294,11 +294,6 @@ static void redirect_to_portal(AsyncWebServerRequest* request) {
     request->redirect(url);
 }
 
-// Redirect the request to the root page (relative redirect, used for the
-// catch-all not-found handler where an absolute URL is not required).
-static void redirect_to_root(AsyncWebServerRequest* request) {
-    request->redirect("/");
-}
 
 void setup() {
     Serial.begin(115200);
@@ -381,7 +376,7 @@ void setup() {
     });
 
     // Redirect any unhandled path to root so the captive portal always shows.
-    http_server.onNotFound(redirect_to_root);
+    http_server.onNotFound(redirect_to_portal);
 
     http_server.begin();
 }
