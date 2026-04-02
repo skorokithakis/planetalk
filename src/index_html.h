@@ -480,6 +480,18 @@ static const char INDEX_HTML[] = R"rawhtml(<!DOCTYPE html>
   });
 
   connect();
+
+  // On mobile, opening the soft keyboard fires a visualViewport resize event
+  // but does NOT shrink window.innerHeight reliably across browsers. Setting
+  // body height explicitly to visualViewport.height keeps the flex layout
+  // contained to the visible area so the input bar stays above the keyboard.
+  if (window.visualViewport) {
+    window.visualViewport.addEventListener('resize', function () {
+      const nearBottom = messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < 50;
+      document.body.style.height = window.visualViewport.height + 'px';
+      if (nearBottom) { messagesEl.scrollTop = messagesEl.scrollHeight; }
+    });
+  }
 }());
 </script>
 </body>
