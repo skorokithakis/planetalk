@@ -42,9 +42,9 @@ There are only two source files. Everything lives in `main.cpp` and `index_html.
 ### Captive portal flow
 
 - First-time visitor: all HTTP requests (including OS probe URLs) redirect to `http://192.168.4.1/`.
-- Serving `/` marks the client IP as "visited" in `std::set<uint32_t> visited_ips`.
-- Subsequent OS probe requests from a known IP return the expected success responses (HTTP 204, 200 with correct body, etc.) so the OS stops showing "no internet" warnings.
-- `visited_ips` is capped at 20 entries and cleared entirely when full (ephemeral AP connections, no need for LRU eviction).
+- Serving `/` marks the client as "visited" in `std::set<std::string> visited_clients`, keyed by MAC address (via `client_id_for_ip()`, falling back to IP string when MAC lookup fails).
+- Subsequent OS probe requests from a known client return the expected success responses (HTTP 204, 200 with correct body, etc.) so the OS stops showing "no internet" warnings.
+- `visited_clients` is capped at 20 entries and cleared entirely when full (ephemeral AP connections, no need for LRU eviction).
 
 ### Message storage and persistence
 
@@ -104,6 +104,60 @@ All messages are JSON text frames. Fragmented or binary frames are silently igno
 - Users can rename themselves. The server validates: non-empty, max 20 chars, alphanumeric + spaces only. On success it broadcasts a `nick` packet to all clients and sends a `welcome` packet directly to the renaming client (the authoritative identity update).
 - Nicknames are stored in `std::map<uint32_t, std::string> client_nicknames` keyed by WebSocket client ID.
 
+### IP address usage (complete inventory)
+
+IP addresses appear in three distinct roles in `src/main.cpp`:
+
+#### 1. `visited_clients` — captive portal "known client" set
+
+```cpp
+static std::set<std::string> visited_clients;  // MAC string, or IP string as fallback
+static const size_t VISITED_CLIENTS_MAX = 20;
+```
+
+- **Purpose:** distinguish first-time visitors from returning ones so that OS captive-portal probe URLs (`/generate_204`, `/hotspot-detect.html`, `/connecttest.txt`, `/redirect`, `/success.txt`, `/fwlink/*`) return the correct success response instead of a redirect once the user has already loaded the chat page.
+- **Populated:** in the `GET /` handler — `visited_clients.insert(client_id_for_ip(ip))` — only after the root page is served.
+- **Checked:** in every captive-portal probe handler and in `onNotFound` via `visited_clients.count(client_id_for_ip(request->client()->remoteIP()))`.
+- **Eviction:** no LRU; when `visited_clients.size() >= 20` the entire set is cleared before inserting the new entry. This is intentional — connections are ephemeral and the set only needs to survive for the duration of a single AP session.
+- **Scope:** RAM only, lost on reboot. Never written to flash.
+- **Type stored:** `std::string` — MAC address (e.g. `"AA:BB:CC:DD:EE:FF"`) when `mac_for_ip()` succeeds, otherwise the IP string (e.g. `"192.168.4.2"`). Using MAC as the primary key means a client that renews its DHCP lease is still recognised as already-visited.
+- **Key resolution:** the `client_id_for_ip(const IPAddress&)` helper encapsulates this logic — it calls `mac_for_ip()` and falls back to `ip.toString()` — so the pattern is not repeated at every call site.
+
+#### 2. Nickname generation fallback
+
+```cpp
+IPAddress remote_ip = client->remoteIP();
+String mac = mac_for_ip(remote_ip);
+String hash_input = mac.length() > 0 ? mac : remote_ip.toString();
+std::string nick = generate_nickname(hash_input);
+```
+
+- **Purpose:** if `mac_for_ip()` cannot find the client in the AP's DHCP lease table (e.g. the lookup races with DHCP assignment), the IP string is used as the hash input instead of the MAC. The resulting nickname is still deterministic for that IP.
+- **Preferred identifier:** MAC address (stable across reconnects). IP is only the fallback.
+- **Not stored:** the IP is used transiently during nickname generation and is not retained after `WS_EVT_CONNECT` returns.
+
+#### 3. `mac_for_ip()` — IP-to-MAC resolution
+
+```cpp
+static String mac_for_ip(const IPAddress& ip) {
+    // calls esp_wifi_ap_get_sta_list() then esp_wifi_ap_get_sta_list_with_ip()
+    // iterates mac_ip_list.sta[] matching on sta[i].ip.addr == (uint32_t)ip
+}
+```
+
+- **Purpose:** translate the WebSocket client's remote IP to its MAC address so the nickname is stable across DHCP lease renewals.
+- **Scope:** purely transient; the IP is only used as a lookup key and is not stored.
+
+#### Summary table
+
+| Variable / call site | Type | Stored? | Purpose |
+|---|---|---|---|
+| `visited_clients` | `std::set<std::string>` | RAM only | Captive portal "already visited" gate |
+| `client_id_for_ip(remote_ip)` | transient `std::string` | No | Resolve IP → MAC (or IP string fallback) for `visited_clients` |
+| `mac_for_ip(remote_ip)` | transient `IPAddress` | No | Resolve IP → MAC for nickname hashing and `client_id_for_ip()` |
+| `hash_input = remote_ip.toString()` | transient `String` | No | Fallback hash seed when MAC lookup fails |
+| `request->client()->remoteIP()` in probe handlers | transient `IPAddress` | No | Check membership in `visited_clients` via `client_id_for_ip()` |
+
 ### Frontend (index_html.h)
 
 The entire UI is a single HTML file embedded as a C++ raw string literal. No external dependencies, no build step.
@@ -127,6 +181,6 @@ pio run -t upload    # flash to connected ESP32
 pio device monitor   # serial monitor at 115200 baud
 ```
 
-## Open ticket
+## Tickets
 
-- `pla-61dv` (open): add logging for new WiFi station connections (currently only WebSocket connect/disconnect is logged, not the lower-level WiFi association event).
+All 15 tickets in `.tickets/` are closed. There are no open tickets.

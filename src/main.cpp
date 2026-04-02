@@ -33,14 +33,15 @@ static int message_buffer_count = 0;
 
 static std::map<uint32_t, std::string> client_nicknames;
 
-// Tracks which client IPs have loaded the main page at least once. Used to
+// Tracks which clients have loaded the main page at least once. Used to
 // distinguish first-time visitors (who should see the captive portal popup)
 // from returning visitors (who should get real success responses so the OS
-// stops showing "no internet" warnings). Capped at 20 entries; cleared
-// entirely when full because these are ephemeral AP connections and we never
-// need to evict a specific entry.
-static std::set<uint32_t> visited_ips;
-static const size_t VISITED_IPS_MAX = 20;
+// stops showing "no internet" warnings). Keyed by MAC address when available,
+// falling back to IP string. Capped at 20 entries; cleared entirely when full
+// because these are ephemeral AP connections and we never need to evict a
+// specific entry.
+static std::set<std::string> visited_clients;
+static const size_t VISITED_CLIENTS_MAX = 20;
 
 static const char* ADJECTIVES[] = {
     "Excitable", "Sneaky", "Jolly", "Grumpy", "Witty",
@@ -101,6 +102,16 @@ static String mac_for_ip(const IPAddress& ip) {
         }
     }
     return String();
+}
+
+// Resolve a stable client identifier: prefer MAC address (stable across
+// reconnects) over IP string (which can be reassigned by DHCP).
+static std::string client_id_for_ip(const IPAddress& ip) {
+    String mac = mac_for_ip(ip);
+    if (mac.length() > 0) {
+        return std::string(mac.c_str());
+    }
+    return std::string(ip.toString().c_str());
 }
 
 static void push_message(const std::string& json_string) {
@@ -389,7 +400,7 @@ void setup() {
 
     // Android probes /generate_204 and expects HTTP 204 once connected.
     http_server.on("/generate_204", HTTP_GET, [](AsyncWebServerRequest* request) {
-        bool known = visited_ips.count(request->client()->remoteIP());
+        bool known = visited_clients.count(client_id_for_ip(request->client()->remoteIP()));
         Serial.printf("[HTTP] /generate_204 ip=%s -> %s\r\n",
             request->client()->remoteIP().toString().c_str(),
             known ? "success" : "redirect");
@@ -401,7 +412,7 @@ void setup() {
     });
     // Apple probes /hotspot-detect.html.
     http_server.on("/hotspot-detect.html", HTTP_GET, [](AsyncWebServerRequest* request) {
-        bool known = visited_ips.count(request->client()->remoteIP());
+        bool known = visited_clients.count(client_id_for_ip(request->client()->remoteIP()));
         Serial.printf("[HTTP] /hotspot-detect.html ip=%s -> %s\r\n",
             request->client()->remoteIP().toString().c_str(),
             known ? "success" : "redirect");
@@ -414,7 +425,7 @@ void setup() {
     });
     // Windows probes /connecttest.txt.
     http_server.on("/connecttest.txt", HTTP_GET, [](AsyncWebServerRequest* request) {
-        bool known = visited_ips.count(request->client()->remoteIP());
+        bool known = visited_clients.count(client_id_for_ip(request->client()->remoteIP()));
         Serial.printf("[HTTP] /connecttest.txt ip=%s -> %s\r\n",
             request->client()->remoteIP().toString().c_str(),
             known ? "success" : "redirect");
@@ -426,7 +437,7 @@ void setup() {
     });
     // Windows also probes /redirect.
     http_server.on("/redirect", HTTP_GET, [](AsyncWebServerRequest* request) {
-        bool known = visited_ips.count(request->client()->remoteIP());
+        bool known = visited_clients.count(client_id_for_ip(request->client()->remoteIP()));
         Serial.printf("[HTTP] /redirect ip=%s -> %s\r\n",
             request->client()->remoteIP().toString().c_str(),
             known ? "success" : "redirect");
@@ -438,7 +449,7 @@ void setup() {
     });
     // Firefox probes /success.txt.
     http_server.on("/success.txt", HTTP_GET, [](AsyncWebServerRequest* request) {
-        bool known = visited_ips.count(request->client()->remoteIP());
+        bool known = visited_clients.count(client_id_for_ip(request->client()->remoteIP()));
         Serial.printf("[HTTP] /success.txt ip=%s -> %s\r\n",
             request->client()->remoteIP().toString().c_str(),
             known ? "success" : "redirect");
@@ -450,7 +461,7 @@ void setup() {
     });
     // Microsoft uses /fwlink/ paths; the wildcard prefix matches all of them.
     http_server.on("/fwlink/*", HTTP_GET, [](AsyncWebServerRequest* request) {
-        bool known = visited_ips.count(request->client()->remoteIP());
+        bool known = visited_clients.count(client_id_for_ip(request->client()->remoteIP()));
         Serial.printf("[HTTP] %s ip=%s -> %s\r\n",
             request->url().c_str(),
             request->client()->remoteIP().toString().c_str(),
@@ -472,19 +483,20 @@ void setup() {
             return;
         }
 
-        uint32_t ip = request->client()->remoteIP();
-        if (visited_ips.size() >= VISITED_IPS_MAX) {
-            visited_ips.clear();
+        std::string client_id = client_id_for_ip(request->client()->remoteIP());
+        if (visited_clients.size() >= VISITED_CLIENTS_MAX) {
+            visited_clients.clear();
         }
-        visited_ips.insert(ip);
+        visited_clients.insert(client_id);
         request->send(200, "text/html", INDEX_HTML);
     });
 
-    // Known IPs get a 200 so unhandled OS probe URLs don't re-trigger captive
-    // portal detection for users who have already loaded the chat. Unknown IPs
-    // are still redirected to root to trigger the initial portal popup.
+    // Known clients get a 200 so unhandled OS probe URLs don't re-trigger
+    // captive portal detection for users who have already loaded the chat.
+    // Unknown clients are still redirected to root to trigger the initial
+    // portal popup.
     http_server.onNotFound([](AsyncWebServerRequest* request) {
-        bool known = visited_ips.count(request->client()->remoteIP());
+        bool known = visited_clients.count(client_id_for_ip(request->client()->remoteIP()));
         Serial.printf("[HTTP] %s ip=%s -> %s\r\n",
             request->url().c_str(),
             request->client()->remoteIP().toString().c_str(),
