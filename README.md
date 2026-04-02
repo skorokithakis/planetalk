@@ -1,5 +1,7 @@
 # PlaneTalk
 
+<img src="misc/screenshot.png" height="300">
+
 ESP32 firmware that creates an open WiFi access point with a captive portal chat room. Connect to the AP, get a chat window, talk to everyone else connected.
 
 Built for situations where you want local, infrastructure-free group chat — planes, buses, conferences, camping, or anywhere without internet.
