@@ -227,6 +227,8 @@ static void handle_websocket_event(
 
             const char* to_nick = doc["to"];
             if (to_nick && strlen(to_nick) > 0) {
+                if (it->second == to_nick) return;
+
                 // Private message: find the target client by nickname.
                 AsyncWebSocketClient* target_client = nullptr;
                 for (auto& entry : client_nicknames) {
