@@ -426,8 +426,8 @@ static const char INDEX_HTML[] = R"rawhtml(<!DOCTYPE html>
     nickSpan.className = 'nick';
     nickSpan.textContent = nick + ':';
 
-    // System nicks are not clickable — they don't represent real users.
-    if (!isSystem) {
+    // System nicks and the user's own nick are not clickable.
+    if (!isSystem && nick !== currentNick) {
       const btn = document.createElement('button');
       btn.className = 'nick-btn';
       btn.appendChild(nickSpan);
