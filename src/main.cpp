@@ -161,6 +161,12 @@ static void handle_websocket_event(
         std::string nick = generate_nickname(hash_input);
         client_nicknames[client->id()] = nick;
 
+        Serial.printf("[WS] connect id=%u ip=%s mac=%s nick=%s\n",
+            client->id(),
+            remote_ip.toString().c_str(),
+            mac.length() > 0 ? mac.c_str() : "no MAC",
+            nick.c_str());
+
         // Tell this client its assigned nickname before sending history so the
         // UI can display it before any messages are rendered.
         JsonDocument welcome;
@@ -179,6 +185,8 @@ static void handle_websocket_event(
     } else if (event_type == WS_EVT_DISCONNECT) {
         auto it = client_nicknames.find(client->id());
         if (it != client_nicknames.end()) {
+            Serial.printf("[WS] disconnect id=%u nick=%s\n",
+                client->id(), it->second.c_str());
             std::string leave_msg = make_message("System", (it->second + " has left").c_str());
             push_message(leave_msg);
             broadcast(leave_msg);
@@ -196,6 +204,7 @@ static void handle_websocket_event(
         JsonDocument doc;
         DeserializationError error = deserializeJson(doc, data, length);
         if (error) {
+            Serial.printf("[WS] JSON parse error id=%u\n", client->id());
             JsonDocument err;
             err["type"] = "error";
             err["text"] = "Invalid JSON";
@@ -228,6 +237,8 @@ static void handle_websocket_event(
                 }
 
                 if (!target_client) {
+                    Serial.printf("[PM] %s -> %s: target not found\n",
+                        it->second.c_str(), to_nick);
                     JsonDocument err;
                     err["type"] = "error";
                     err["text"] = "User not found";
@@ -246,6 +257,8 @@ static void handle_websocket_event(
                 std::string pm_str;
                 serializeJson(pm_doc, pm_str);
 
+                Serial.printf("[PM] %s -> %s: %s\n",
+                    it->second.c_str(), to_nick, text);
                 target_client->text(pm_str.c_str());
                 // Echo back to sender only if they are not messaging themselves.
                 if (target_client->id() != client->id()) {
@@ -255,6 +268,7 @@ static void handle_websocket_event(
                 return;
             }
 
+            Serial.printf("[MSG] %s: %s\n", it->second.c_str(), text);
             std::string msg = make_message(it->second.c_str(), text);
             push_message(msg);
             broadcast(msg);
@@ -282,6 +296,7 @@ static void handle_websocket_event(
             }
 
             if (!valid) {
+                Serial.printf("[NICK] rejected: %s\n", new_nick_raw);
                 JsonDocument err;
                 err["type"] = "error";
                 err["text"] = "Nickname must be 1-20 characters (letters, numbers, spaces)";
@@ -296,6 +311,8 @@ static void handle_websocket_event(
 
             std::string old_nick = it->second;
             it->second = new_nick;
+
+            Serial.printf("[NICK] %s -> %s\n", old_nick.c_str(), new_nick.c_str());
 
             JsonDocument nick_doc;
             nick_doc["type"] = "nick";
@@ -352,7 +369,11 @@ void setup() {
 
     // Android probes /generate_204 and expects HTTP 204 once connected.
     http_server.on("/generate_204", HTTP_GET, [](AsyncWebServerRequest* request) {
-        if (visited_ips.count(request->client()->remoteIP())) {
+        bool known = visited_ips.count(request->client()->remoteIP());
+        Serial.printf("[HTTP] /generate_204 ip=%s -> %s\n",
+            request->client()->remoteIP().toString().c_str(),
+            known ? "success" : "redirect");
+        if (known) {
             request->send(204);
         } else {
             redirect_to_portal(request);
@@ -360,7 +381,11 @@ void setup() {
     });
     // Apple probes /hotspot-detect.html.
     http_server.on("/hotspot-detect.html", HTTP_GET, [](AsyncWebServerRequest* request) {
-        if (visited_ips.count(request->client()->remoteIP())) {
+        bool known = visited_ips.count(request->client()->remoteIP());
+        Serial.printf("[HTTP] /hotspot-detect.html ip=%s -> %s\n",
+            request->client()->remoteIP().toString().c_str(),
+            known ? "success" : "redirect");
+        if (known) {
             request->send(200, "text/html",
                 "<HTML><HEAD><TITLE>Success</TITLE></HEAD><BODY>Success</BODY></HTML>");
         } else {
@@ -369,7 +394,11 @@ void setup() {
     });
     // Windows probes /connecttest.txt.
     http_server.on("/connecttest.txt", HTTP_GET, [](AsyncWebServerRequest* request) {
-        if (visited_ips.count(request->client()->remoteIP())) {
+        bool known = visited_ips.count(request->client()->remoteIP());
+        Serial.printf("[HTTP] /connecttest.txt ip=%s -> %s\n",
+            request->client()->remoteIP().toString().c_str(),
+            known ? "success" : "redirect");
+        if (known) {
             request->send(200, "text/plain", "Microsoft Connect Test");
         } else {
             redirect_to_portal(request);
@@ -377,7 +406,11 @@ void setup() {
     });
     // Windows also probes /redirect.
     http_server.on("/redirect", HTTP_GET, [](AsyncWebServerRequest* request) {
-        if (visited_ips.count(request->client()->remoteIP())) {
+        bool known = visited_ips.count(request->client()->remoteIP());
+        Serial.printf("[HTTP] /redirect ip=%s -> %s\n",
+            request->client()->remoteIP().toString().c_str(),
+            known ? "success" : "redirect");
+        if (known) {
             request->send(200);
         } else {
             redirect_to_portal(request);
@@ -385,7 +418,11 @@ void setup() {
     });
     // Firefox probes /success.txt.
     http_server.on("/success.txt", HTTP_GET, [](AsyncWebServerRequest* request) {
-        if (visited_ips.count(request->client()->remoteIP())) {
+        bool known = visited_ips.count(request->client()->remoteIP());
+        Serial.printf("[HTTP] /success.txt ip=%s -> %s\n",
+            request->client()->remoteIP().toString().c_str(),
+            known ? "success" : "redirect");
+        if (known) {
             request->send(200, "text/plain", "success\n");
         } else {
             redirect_to_portal(request);
@@ -393,7 +430,12 @@ void setup() {
     });
     // Microsoft uses /fwlink/ paths; the wildcard prefix matches all of them.
     http_server.on("/fwlink/*", HTTP_GET, [](AsyncWebServerRequest* request) {
-        if (visited_ips.count(request->client()->remoteIP())) {
+        bool known = visited_ips.count(request->client()->remoteIP());
+        Serial.printf("[HTTP] %s ip=%s -> %s\n",
+            request->url().c_str(),
+            request->client()->remoteIP().toString().c_str(),
+            known ? "success" : "redirect");
+        if (known) {
             request->send(200);
         } else {
             redirect_to_portal(request);
