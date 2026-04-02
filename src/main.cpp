@@ -451,8 +451,21 @@ void setup() {
         request->send(200, "text/html", INDEX_HTML);
     });
 
-    // Redirect any unhandled path to root so the captive portal always shows.
-    http_server.onNotFound(redirect_to_portal);
+    // Known IPs get a 200 so unhandled OS probe URLs don't re-trigger captive
+    // portal detection for users who have already loaded the chat. Unknown IPs
+    // are still redirected to root to trigger the initial portal popup.
+    http_server.onNotFound([](AsyncWebServerRequest* request) {
+        bool known = visited_ips.count(request->client()->remoteIP());
+        Serial.printf("[HTTP] %s ip=%s -> %s\n",
+            request->url().c_str(),
+            request->client()->remoteIP().toString().c_str(),
+            known ? "success" : "redirect");
+        if (known) {
+            request->send(200);
+        } else {
+            redirect_to_portal(request);
+        }
+    });
 
     http_server.begin();
 }

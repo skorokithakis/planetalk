@@ -239,9 +239,100 @@ static const char INDEX_HTML[] = R"rawhtml(<!DOCTYPE html>
   }
   #send-btn:hover { background: #c4b5fd; }
   #send-btn:disabled { background: #3a3a44; color: #666; cursor: default; }
+
+  #welcome-modal {
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.75);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+    padding: 16px;
+  }
+
+  #welcome-modal .modal-card {
+    background: #26262c;
+    border: 1px solid #3a3a44;
+    border-radius: 12px;
+    padding: 28px 24px;
+    max-width: 420px;
+    width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }
+
+  #welcome-modal h1 {
+    font-size: 20px;
+    font-weight: 700;
+    color: #a78bfa;
+    margin: 0;
+  }
+
+  #welcome-modal p {
+    font-size: 15px;
+    color: #c0c0c0;
+    line-height: 1.5;
+    margin: 0;
+  }
+
+  #welcome-modal .url-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+
+  #welcome-modal .url-field {
+    flex: 1;
+    background: #1a1a1e;
+    border: 1px solid #3a3a44;
+    border-radius: 6px;
+    color: #a78bfa;
+    font-family: monospace;
+    font-size: 15px;
+    padding: 6px 10px;
+    min-width: 0;
+    cursor: text;
+  }
+  #welcome-modal .url-field:focus { outline: none; border-color: #a78bfa; }
+
+  #welcome-modal .url-open-link {
+    color: #a78bfa;
+    font-size: 14px;
+    white-space: nowrap;
+    text-decoration: underline;
+  }
+
+  #welcome-dismiss-btn {
+    align-self: flex-end;
+    background: #a78bfa;
+    border: none;
+    border-radius: 8px;
+    color: #1a1a1e;
+    font-weight: 700;
+    font-size: 15px;
+    padding: 10px 22px;
+    cursor: pointer;
+  }
+  #welcome-dismiss-btn:hover { background: #c4b5fd; }
 </style>
 </head>
 <body>
+
+<div id="welcome-modal">
+  <div class="modal-card">
+    <h1>Welcome to PlaneTalk</h1>
+    <p>Your device may warn that this WiFi has no internet — that's expected. Keep this network connected to stay in the chat.</p>
+    <p>For the best experience, open the chat in your browser:</p>
+    <div class="url-row">
+      <input class="url-field" type="text" value="192.168.4.1" readonly>
+      <a class="url-open-link" href="http://192.168.4.1" target="_blank">Open in browser</a>
+    </div>
+    <button id="welcome-dismiss-btn">Start chatting</button>
+  </div>
+</div>
 
 <div id="topbar">
   <span class="label">You are</span>
@@ -270,6 +361,21 @@ static const char INDEX_HTML[] = R"rawhtml(<!DOCTYPE html>
 <script>
 (function () {
   'use strict';
+
+  const welcomeModal      = document.getElementById('welcome-modal');
+  const welcomeDismissBtn = document.getElementById('welcome-dismiss-btn');
+
+  // sessionStorage is cleared when the tab/browser is closed, so the modal
+  // reappears on every new session (e.g. reconnecting to the AP) but not on
+  // every page navigation within the same session.
+  if (sessionStorage.getItem('welcome-dismissed')) {
+    welcomeModal.style.display = 'none';
+  }
+
+  welcomeDismissBtn.addEventListener('click', function () {
+    sessionStorage.setItem('welcome-dismissed', '1');
+    welcomeModal.style.display = 'none';
+  });
 
   const messagesEl   = document.getElementById('messages');
   const msgInput     = document.getElementById('msg-input');
