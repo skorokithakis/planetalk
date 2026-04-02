@@ -161,7 +161,7 @@ static void handle_websocket_event(
         std::string nick = generate_nickname(hash_input);
         client_nicknames[client->id()] = nick;
 
-        Serial.printf("[WS] connect id=%u ip=%s mac=%s nick=%s\n",
+        Serial.printf("[WS] connect id=%u ip=%s mac=%s nick=%s\r\n",
             client->id(),
             remote_ip.toString().c_str(),
             mac.length() > 0 ? mac.c_str() : "no MAC",
@@ -188,7 +188,7 @@ static void handle_websocket_event(
     } else if (event_type == WS_EVT_DISCONNECT) {
         auto it = client_nicknames.find(client->id());
         if (it != client_nicknames.end()) {
-            Serial.printf("[WS] disconnect id=%u nick=%s\n",
+            Serial.printf("[WS] disconnect id=%u nick=%s\r\n",
                 client->id(), it->second.c_str());
             JsonDocument leave_doc;
             leave_doc["type"] = "leave";
@@ -210,7 +210,7 @@ static void handle_websocket_event(
         JsonDocument doc;
         DeserializationError error = deserializeJson(doc, data, length);
         if (error) {
-            Serial.printf("[WS] JSON parse error id=%u\n", client->id());
+            Serial.printf("[WS] JSON parse error id=%u\r\n", client->id());
             JsonDocument err;
             err["type"] = "error";
             err["text"] = "Invalid JSON";
@@ -245,7 +245,7 @@ static void handle_websocket_event(
                 }
 
                 if (!target_client) {
-                    Serial.printf("[PM] %s -> %s: target not found\n",
+                    Serial.printf("[PM] %s -> %s: target not found\r\n",
                         it->second.c_str(), to_nick);
                     JsonDocument err;
                     err["type"] = "error";
@@ -265,7 +265,7 @@ static void handle_websocket_event(
                 std::string pm_str;
                 serializeJson(pm_doc, pm_str);
 
-                Serial.printf("[PM] %s -> %s: %s\n",
+                Serial.printf("[PM] %s -> %s: %s\r\n",
                     it->second.c_str(), to_nick, text);
                 target_client->text(pm_str.c_str());
                 // Echo back to sender only if they are not messaging themselves.
@@ -276,7 +276,7 @@ static void handle_websocket_event(
                 return;
             }
 
-            Serial.printf("[MSG] %s: %s\n", it->second.c_str(), text);
+            Serial.printf("[MSG] %s: %s\r\n", it->second.c_str(), text);
             std::string msg = make_message(it->second.c_str(), text);
             push_message(msg);
             broadcast(msg);
@@ -287,8 +287,8 @@ static void handle_websocket_event(
 
             // Strip leading/trailing whitespace.
             std::string new_nick = new_nick_raw;
-            size_t first = new_nick.find_first_not_of(" \t\r\n");
-            size_t last  = new_nick.find_last_not_of(" \t\r\n");
+            size_t first = new_nick.find_first_not_of(" \t\r\r\n");
+            size_t last  = new_nick.find_last_not_of(" \t\r\r\n");
             if (first == std::string::npos) {
                 new_nick = "";
             } else {
@@ -304,7 +304,7 @@ static void handle_websocket_event(
             }
 
             if (!valid) {
-                Serial.printf("[NICK] rejected: %s\n", new_nick_raw);
+                Serial.printf("[NICK] rejected: %s\r\n", new_nick_raw);
                 JsonDocument err;
                 err["type"] = "error";
                 err["text"] = "Nickname must be 1-20 characters (letters, numbers, spaces)";
@@ -320,7 +320,7 @@ static void handle_websocket_event(
             std::string old_nick = it->second;
             it->second = new_nick;
 
-            Serial.printf("[NICK] %s -> %s\n", old_nick.c_str(), new_nick.c_str());
+            Serial.printf("[NICK] %s -> %s\r\n", old_nick.c_str(), new_nick.c_str());
 
             JsonDocument nick_doc;
             nick_doc["type"] = "nick";
@@ -362,13 +362,13 @@ void setup() {
 
     WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
         const uint8_t* mac = info.wifi_ap_staconnected.mac;
-        Serial.printf("[WiFi] Station connected: %02X:%02X:%02X:%02X:%02X:%02X\n",
+        Serial.printf("[WiFi] Station connected: %02X:%02X:%02X:%02X:%02X:%02X\r\n",
             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     }, ARDUINO_EVENT_WIFI_AP_STACONNECTED);
 
     WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
         const uint8_t* mac = info.wifi_ap_stadisconnected.mac;
-        Serial.printf("[WiFi] Station disconnected: %02X:%02X:%02X:%02X:%02X:%02X\n",
+        Serial.printf("[WiFi] Station disconnected: %02X:%02X:%02X:%02X:%02X:%02X\r\n",
             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     }, ARDUINO_EVENT_WIFI_AP_STADISCONNECTED);
 
@@ -390,7 +390,7 @@ void setup() {
     // Android probes /generate_204 and expects HTTP 204 once connected.
     http_server.on("/generate_204", HTTP_GET, [](AsyncWebServerRequest* request) {
         bool known = visited_ips.count(request->client()->remoteIP());
-        Serial.printf("[HTTP] /generate_204 ip=%s -> %s\n",
+        Serial.printf("[HTTP] /generate_204 ip=%s -> %s\r\n",
             request->client()->remoteIP().toString().c_str(),
             known ? "success" : "redirect");
         if (known) {
@@ -402,7 +402,7 @@ void setup() {
     // Apple probes /hotspot-detect.html.
     http_server.on("/hotspot-detect.html", HTTP_GET, [](AsyncWebServerRequest* request) {
         bool known = visited_ips.count(request->client()->remoteIP());
-        Serial.printf("[HTTP] /hotspot-detect.html ip=%s -> %s\n",
+        Serial.printf("[HTTP] /hotspot-detect.html ip=%s -> %s\r\n",
             request->client()->remoteIP().toString().c_str(),
             known ? "success" : "redirect");
         if (known) {
@@ -415,7 +415,7 @@ void setup() {
     // Windows probes /connecttest.txt.
     http_server.on("/connecttest.txt", HTTP_GET, [](AsyncWebServerRequest* request) {
         bool known = visited_ips.count(request->client()->remoteIP());
-        Serial.printf("[HTTP] /connecttest.txt ip=%s -> %s\n",
+        Serial.printf("[HTTP] /connecttest.txt ip=%s -> %s\r\n",
             request->client()->remoteIP().toString().c_str(),
             known ? "success" : "redirect");
         if (known) {
@@ -427,7 +427,7 @@ void setup() {
     // Windows also probes /redirect.
     http_server.on("/redirect", HTTP_GET, [](AsyncWebServerRequest* request) {
         bool known = visited_ips.count(request->client()->remoteIP());
-        Serial.printf("[HTTP] /redirect ip=%s -> %s\n",
+        Serial.printf("[HTTP] /redirect ip=%s -> %s\r\n",
             request->client()->remoteIP().toString().c_str(),
             known ? "success" : "redirect");
         if (known) {
@@ -439,11 +439,11 @@ void setup() {
     // Firefox probes /success.txt.
     http_server.on("/success.txt", HTTP_GET, [](AsyncWebServerRequest* request) {
         bool known = visited_ips.count(request->client()->remoteIP());
-        Serial.printf("[HTTP] /success.txt ip=%s -> %s\n",
+        Serial.printf("[HTTP] /success.txt ip=%s -> %s\r\n",
             request->client()->remoteIP().toString().c_str(),
             known ? "success" : "redirect");
         if (known) {
-            request->send(200, "text/plain", "success\n");
+            request->send(200, "text/plain", "success\r\n");
         } else {
             redirect_to_portal(request);
         }
@@ -451,7 +451,7 @@ void setup() {
     // Microsoft uses /fwlink/ paths; the wildcard prefix matches all of them.
     http_server.on("/fwlink/*", HTTP_GET, [](AsyncWebServerRequest* request) {
         bool known = visited_ips.count(request->client()->remoteIP());
-        Serial.printf("[HTTP] %s ip=%s -> %s\n",
+        Serial.printf("[HTTP] %s ip=%s -> %s\r\n",
             request->url().c_str(),
             request->client()->remoteIP().toString().c_str(),
             known ? "success" : "redirect");
@@ -485,7 +485,7 @@ void setup() {
     // are still redirected to root to trigger the initial portal popup.
     http_server.onNotFound([](AsyncWebServerRequest* request) {
         bool known = visited_ips.count(request->client()->remoteIP());
-        Serial.printf("[HTTP] %s ip=%s -> %s\n",
+        Serial.printf("[HTTP] %s ip=%s -> %s\r\n",
             request->url().c_str(),
             request->client()->remoteIP().toString().c_str(),
             known ? "success" : "redirect");
