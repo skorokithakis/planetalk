@@ -1,6 +1,6 @@
 # PlaneTalk
 
-<img src="misc/screenshot.png" height="300">
+<img src="misc/screenshot.png" height="600">
 
 ESP32 firmware that creates an open WiFi access point with a captive portal chat room. Connect to the AP, get a chat window, talk to everyone else connected.
 
