@@ -443,6 +443,15 @@ void setup() {
     });
 
     http_server.on("/", HTTP_GET, [](AsyncWebServerRequest* request) {
+        // If the request arrived on a spoofed hostname (e.g. the user typed
+        // "example.com" and our wildcard DNS resolved it here), redirect to
+        // the real AP IP so the URL bar shows the correct address.
+        String host = request->host();
+        if (host.length() > 0 && host != WiFi.softAPIP().toString()) {
+            redirect_to_portal(request);
+            return;
+        }
+
         uint32_t ip = request->client()->remoteIP();
         if (visited_ips.size() >= VISITED_IPS_MAX) {
             visited_ips.clear();
