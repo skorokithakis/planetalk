@@ -354,7 +354,7 @@ static const char INDEX_HTML[] = R"rawhtml(<!DOCTYPE html>
 </div>
 
 <div id="inputarea">
-  <input id="msg-input" type="text" maxlength="500" placeholder="Type a message..." autocomplete="off">
+  <input id="msg-input" type="text" maxlength="500" placeholder="Type a message..." autocomplete="off" autofocus>
   <button id="send-btn" disabled>Send</button>
 </div>
 

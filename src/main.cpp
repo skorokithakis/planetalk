@@ -13,7 +13,7 @@
 
 #include "index_html.h"
 
-static const char* AP_SSID = "Connect and chat!";
+static const char* AP_SSID = "PlaneTalk";
 static const int AP_MAX_STATIONS = 10;
 // DNS port 53 is the standard DNS port; all queries are answered with the AP
 // IP so that every hostname resolves to us, triggering captive portal detection.
