@@ -1,6 +1,6 @@
 ---
 id: pla-yixx
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-04-01T23:33:59Z

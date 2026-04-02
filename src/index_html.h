@@ -441,6 +441,7 @@ static const char INDEX_HTML[] = R"rawhtml(<!DOCTYPE html>
     }
     ws.send(JSON.stringify(payload));
     msgInput.value = '';
+    msgInput.focus();
   }
 
   sendBtn.addEventListener('click', sendMessage);
