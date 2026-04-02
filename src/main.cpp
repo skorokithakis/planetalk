@@ -178,8 +178,11 @@ static void handle_websocket_event(
 
         send_history(client);
 
-        std::string join_msg = make_message("System", (nick + " has joined").c_str());
-        push_message(join_msg);
+        JsonDocument join_doc;
+        join_doc["type"] = "join";
+        join_doc["nick"] = nick.c_str();
+        std::string join_msg;
+        serializeJson(join_doc, join_msg);
         broadcast(join_msg);
 
     } else if (event_type == WS_EVT_DISCONNECT) {
@@ -187,8 +190,11 @@ static void handle_websocket_event(
         if (it != client_nicknames.end()) {
             Serial.printf("[WS] disconnect id=%u nick=%s\n",
                 client->id(), it->second.c_str());
-            std::string leave_msg = make_message("System", (it->second + " has left").c_str());
-            push_message(leave_msg);
+            JsonDocument leave_doc;
+            leave_doc["type"] = "leave";
+            leave_doc["nick"] = it->second.c_str();
+            std::string leave_msg;
+            serializeJson(leave_doc, leave_msg);
             broadcast(leave_msg);
             client_nicknames.erase(it);
         }

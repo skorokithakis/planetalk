@@ -397,6 +397,14 @@ static const char INDEX_HTML[] = R"rawhtml(<!DOCTYPE html>
   // null means public chat; a non-empty string is the nick we are PMing.
   let pmTarget = null;
 
+  // Presence coalescing state. presenceGroup is an ordered array of
+  // {nick, action} where action is 'joined', 'left', or 'joined_and_left'.
+  // presenceEl is the DOM element currently being updated, or null when sealed.
+  // A group is sealed when a real chat or nick-change message arrives, causing
+  // the next presence event to start a fresh element.
+  let presenceGroup = [];
+  let presenceEl = null;
+
   function setStatus(text, cls) {
     statusBar.textContent = text;
     statusBar.className = cls || '';
@@ -462,24 +470,112 @@ static const char INDEX_HTML[] = R"rawhtml(<!DOCTYPE html>
     messagesEl.scrollTop = messagesEl.scrollHeight;
   }
 
+  // Produce a human-readable sentence from a list of nicks, e.g.
+  // ["Alice"] -> "Alice"  /  ["Alice", "Bob"] -> "Alice, Bob"
+  function joinNicks(nicks) {
+    return nicks.join(', ');
+  }
+
+  // Render the current presenceGroup into a single sentence and update the
+  // presenceEl text content.
+  function renderPresenceEl() {
+    var joined = [];
+    var left = [];
+    var joinedAndLeft = [];
+
+    presenceGroup.forEach(function (entry) {
+      if (entry.action === 'joined') {
+        joined.push(entry.nick);
+      } else if (entry.action === 'left') {
+        left.push(entry.nick);
+      } else {
+        joinedAndLeft.push(entry.nick);
+      }
+    });
+
+    var parts = [];
+
+    if (joined.length === 1) {
+      parts.push(joined[0] + ' has joined');
+    } else if (joined.length > 1) {
+      parts.push(joinNicks(joined) + ' have joined');
+    }
+
+    if (left.length === 1) {
+      parts.push(left[0] + ' has left');
+    } else if (left.length > 1) {
+      parts.push(joinNicks(left) + ' have left');
+    }
+
+    joinedAndLeft.forEach(function (nick) {
+      parts.push(nick + ' has joined and left');
+    });
+
+    presenceEl.textContent = parts.join(', ');
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  // Seal the current presence group so the next presence event starts a new
+  // element. Called when a real chat message or nick-change arrives.
+  function sealPresenceGroup() {
+    presenceGroup = [];
+    presenceEl = null;
+  }
+
+  // Handle a join or leave presence event.
+  function handlePresenceEvent(nick, action) {
+    if (!presenceEl) {
+      presenceEl = document.createElement('div');
+      presenceEl.className = 'msg system';
+      messagesEl.appendChild(presenceEl);
+    }
+
+    var existing = null;
+    for (var i = 0; i < presenceGroup.length; i++) {
+      if (presenceGroup[i].nick === nick) {
+        existing = presenceGroup[i];
+        break;
+      }
+    }
+
+    if (existing) {
+      // Only escalate to joined_and_left when the new event is in the opposite
+      // direction. If the state is already joined_and_left, all three events
+      // have been seen and there is nothing further to record. If the new event
+      // is in the same direction as the existing one (e.g. a reconnect after
+      // joined_and_left), joined_and_left remains accurate.
+      if (existing.action !== action && existing.action !== 'joined_and_left') {
+        existing.action = 'joined_and_left';
+      }
+    } else {
+      presenceGroup.push({ nick: nick, action: action });
+    }
+
+    renderPresenceEl();
+  }
+
   function handleMessage(data) {
     let msg;
     try { msg = JSON.parse(data); } catch (e) { return; }
 
-    if (msg.type === 'message') {
+    if (msg.type === 'join') {
+      handlePresenceEvent(msg.nick, 'joined');
+
+    } else if (msg.type === 'leave') {
+      handlePresenceEvent(msg.nick, 'left');
+
+      // When the user we are PMing disconnects, auto-close PM mode.
+      if (pmTarget && msg.nick === pmTarget) {
+        closePm();
+      }
+
+    } else if (msg.type === 'message') {
+      sealPresenceGroup();
       const isSystem = msg.nick === 'System';
       appendMessage(msg.nick, msg.text, new Date(), isSystem, !!msg.pm);
 
-      // When the user we are PMing disconnects, auto-close PM mode.
-      // Leave messages have the form "NickName has left" from the System nick.
-      if (isSystem && pmTarget) {
-        const leavePattern = pmTarget + ' has left';
-        if (msg.text === leavePattern) {
-          closePm();
-        }
-      }
-
     } else if (msg.type === 'nick') {
+      sealPresenceGroup();
       // Broadcast notification only — own nick is updated exclusively via
       // the welcome message the server sends directly to the requesting client,
       // preventing false updates when two users share the same nickname.
