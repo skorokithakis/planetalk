@@ -360,6 +360,18 @@ void setup() {
     // Open AP with no password; channel 1, not hidden, max 10 connected stations.
     WiFi.softAP(AP_SSID, nullptr, 1, 0, AP_MAX_STATIONS);
 
+    WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
+        const uint8_t* mac = info.wifi_ap_staconnected.mac;
+        Serial.printf("[WiFi] Station connected: %02X:%02X:%02X:%02X:%02X:%02X\n",
+            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    }, ARDUINO_EVENT_WIFI_AP_STACONNECTED);
+
+    WiFi.onEvent([](WiFiEvent_t event, WiFiEventInfo_t info) {
+        const uint8_t* mac = info.wifi_ap_stadisconnected.mac;
+        Serial.printf("[WiFi] Station disconnected: %02X:%02X:%02X:%02X:%02X:%02X\n",
+            mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    }, ARDUINO_EVENT_WIFI_AP_STADISCONNECTED);
+
     Serial.print("AP started. IP: ");
     Serial.println(WiFi.softAPIP());
 
@@ -490,4 +502,7 @@ void setup() {
 void loop() {
     dns_server.processNextRequest();
     web_socket.cleanupClients();
+    // Yield to the RTOS idle task so the CPU isn't spinning at 100%, which
+    // reduces power draw and heat significantly.
+    delay(1);
 }

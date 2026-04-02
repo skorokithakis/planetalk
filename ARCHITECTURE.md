@@ -66,10 +66,12 @@ Private messages (PMs) are **never stored** in the buffer; they are ephemeral po
 
 Generated entirely on the server side in `handle_websocket_event`:
 
-- **Join** (`WS_EVT_CONNECT`): after sending `welcome` and `history` to the new client, the server calls `make_message("System", nick + " has joined")`, pushes it to the buffer, and broadcasts it to all clients.
-- **Leave** (`WS_EVT_DISCONNECT`): the server calls `make_message("System", nick + " has left")`, pushes it to the buffer, and broadcasts it.
+- **Join** (`WS_EVT_CONNECT`): after sending `welcome` and `history` to the new client, the server broadcasts `{type:"join", nick}` to all clients.
+- **Leave** (`WS_EVT_DISCONNECT`): the server broadcasts `{type:"leave", nick}` to all clients.
 
-Both are regular `{type:"message", nick:"System", text:"..."}` packets — the frontend identifies them as system messages by checking `msg.nick === 'System'`.
+These are **ephemeral** — they are **not** pushed to the message buffer and are therefore not replayed to new joiners.
+
+The frontend coalesces consecutive join/leave events into a single DOM element (`presenceEl`) using a `presenceGroup` array. Each entry tracks `{nick, action}` where `action` is `'joined'`, `'left'`, or `'joined_and_left'`. The element is "sealed" (a new one started) when any real chat message or nick-change arrives. This prevents a burst of joins/leaves from flooding the message list.
 
 ### WebSocket protocol (JSON)
 
@@ -81,7 +83,9 @@ All messages are JSON text frames. Fragmented or binary frames are silently igno
 |---|---|---|
 | `welcome` | On connect (and after nick change) | `{type, nick}` |
 | `history` | Immediately after `welcome` | `{type, messages: [serialised JSON strings]}` |
-| `message` | New chat message or join/leave | `{type, nick, text}` + optional `pm: true` |
+| `message` | New public or private chat message | `{type, nick, text}` + optional `pm: true` |
+| `join` | A client connects | `{type, nick}` |
+| `leave` | A client disconnects | `{type, nick}` |
 | `nick` | Any user renames | `{type, old, new}` |
 | `error` | Bad JSON, invalid nick, user not found | `{type, text}` |
 
