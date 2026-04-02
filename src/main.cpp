@@ -7,6 +7,9 @@
 #include <set>
 #include <string>
 #include <array>
+#include <esp_wifi.h>
+#include <esp_netif.h>
+#include <esp_wifi_ap_get_sta_list.h>
 
 #include "index_html.h"
 
@@ -55,20 +58,49 @@ static const char* FRUITS[] = {
 };
 static const int FRUITS_COUNT = 20;
 
-// Derive a deterministic nickname from an IP address string by hashing each
+// Derive a deterministic nickname from an arbitrary string by hashing each
 // character with a simple polynomial hash, then taking modulo the list sizes.
 // Using two independent hash seeds ensures the adjective and fruit selections
-// are uncorrelated even when IPs differ by only one octet.
-static std::string nickname_for_ip(const String& ip) {
+// are uncorrelated even when inputs differ by only one character.
+static std::string generate_nickname(const String& input) {
     uint32_t hash_a = 5381;
     uint32_t hash_b = 0x811c9dc5;
-    for (size_t i = 0; i < (size_t)ip.length(); i++) {
-        hash_a = hash_a * 33 ^ (uint8_t)ip[i];
-        hash_b = (hash_b ^ (uint8_t)ip[i]) * 0x01000193;
+    for (size_t i = 0; i < (size_t)input.length(); i++) {
+        hash_a = hash_a * 33 ^ (uint8_t)input[i];
+        hash_b = (hash_b ^ (uint8_t)input[i]) * 0x01000193;
     }
     std::string nick = ADJECTIVES[hash_a % ADJECTIVES_COUNT];
     nick += FRUITS[hash_b % FRUITS_COUNT];
     return nick;
+}
+
+// Look up the MAC address of a connected station by matching its IP against
+// the AP's DHCP lease table. Returns a formatted MAC string ("AA:BB:CC:DD:EE:FF")
+// on success, or an empty string if the station is not found or the lookup fails.
+// MAC addresses are stable across reconnects (unlike DHCP-assigned IPs), making
+// them a better key for nickname generation.
+static String mac_for_ip(const IPAddress& ip) {
+    wifi_sta_list_t wifi_sta_list;
+    if (esp_wifi_ap_get_sta_list(&wifi_sta_list) != ESP_OK) {
+        return String();
+    }
+
+    wifi_sta_mac_ip_list_t mac_ip_list;
+    if (esp_wifi_ap_get_sta_list_with_ip(&wifi_sta_list, &mac_ip_list) != ESP_OK) {
+        return String();
+    }
+
+    uint32_t target_ip = (uint32_t)ip;
+    for (int i = 0; i < mac_ip_list.num; i++) {
+        if (mac_ip_list.sta[i].ip.addr == target_ip) {
+            const uint8_t* mac = mac_ip_list.sta[i].mac;
+            char buf[18];
+            snprintf(buf, sizeof(buf), "%02X:%02X:%02X:%02X:%02X:%02X",
+                     mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+            return String(buf);
+        }
+    }
+    return String();
 }
 
 static void push_message(const std::string& json_string) {
@@ -123,8 +155,10 @@ static void handle_websocket_event(
     size_t length
 ) {
     if (event_type == WS_EVT_CONNECT) {
-        String ip = client->remoteIP().toString();
-        std::string nick = nickname_for_ip(ip);
+        IPAddress remote_ip = client->remoteIP();
+        String mac = mac_for_ip(remote_ip);
+        String hash_input = mac.length() > 0 ? mac : remote_ip.toString();
+        std::string nick = generate_nickname(hash_input);
         client_nicknames[client->id()] = nick;
 
         // Tell this client its assigned nickname before sending history so the

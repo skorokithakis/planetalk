@@ -1,6 +1,6 @@
 ---
 id: pla-w98f
-status: open
+status: closed
 deps: []
 links: []
 created: 2026-04-01T23:26:59Z
